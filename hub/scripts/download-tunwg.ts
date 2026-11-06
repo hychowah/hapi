@@ -5,37 +5,55 @@
  * Output directory: shared/tools/tunwg/
  */
 
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const isWindows = process.platform === 'win32';
 
-const TUNWG_RELEASES: Record<string, string> = {
-    'x64-linux': 'https://github.com/tiann/tunwg/releases/latest/download/tunwg',
-    'arm64-linux': 'https://github.com/tiann/tunwg/releases/latest/download/tunwg-arm64',
-    'x64-darwin': 'https://github.com/tiann/tunwg/releases/latest/download/tunwg-darwin',
-    'arm64-darwin': 'https://github.com/tiann/tunwg/releases/latest/download/tunwg-darwin-arm64',
-    'x64-win32': 'https://github.com/tiann/tunwg/releases/latest/download/tunwg.exe'
+const TUNWG_VERSION = 'v26.08.03+122a6d0';
+const RELEASE_URL = `https://github.com/tiann/tunwg/releases/download/${encodeURIComponent(TUNWG_VERSION)}`;
+const TUNWG_RELEASES = {
+    'x64-linux': { asset: 'tunwg', sha256: 'c1a7e08d956d9ee1087b8bf3b651d5dc32aee80eee1052c11218189fd5635768' },
+    'arm64-linux': { asset: 'tunwg-arm64', sha256: 'd2d29afda075e26bb70140184b5ee6c8a8cf56b18f1fe56db3c002d7dbe5eef9' },
+    'x64-darwin': { asset: 'tunwg-darwin', sha256: '5b354c7d071cf7c5346f446fbbec8f4fe218278c6d1d9c6dca217dcdd0b96c22' },
+    'arm64-darwin': { asset: 'tunwg-darwin-arm64', sha256: '4ff96e3ff7271a1bb940c8e7e071900d2135b483baab387d4f8ba8dc2ddd333a' },
+    'x64-win32': { asset: 'tunwg.exe', sha256: 'abb6538ee38a23353fe5e5a4ba74a9d597ef1ebacdbf147df2e19325ccb8c7e8' },
 };
 
-const LICENSE_URL = 'https://raw.githubusercontent.com/tiann/tunwg/refs/heads/main/LICENSE';
+const LICENSE_URL = `https://raw.githubusercontent.com/tiann/tunwg/${encodeURIComponent(TUNWG_VERSION)}/LICENSE`;
+const LICENSE_SHA256 = 'd8ac11fb1304443975a04293266bc30227d0dbf01a44f9d51d9ece096aadbe36';
 
-async function downloadFile(url: string, destPath: string): Promise<void> {
+function digest(bytes: Uint8Array): string {
+    return createHash('sha256').update(bytes).digest('hex');
+}
+
+export async function downloadVerifiedFile(url: string, destPath: string, sha256: string): Promise<void> {
+    if (existsSync(destPath)) {
+        if (digest(readFileSync(destPath)) !== sha256) {
+            throw new Error(`Cached file checksum mismatch: ${destPath}. Remove it and retry.`);
+        }
+        console.log(`Verified cached ${destPath}`);
+        return;
+    }
     console.log(`Downloading ${url}...`);
 
-    const response = await fetch(url, { redirect: 'follow' });
+    const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(120_000) });
     if (!response.ok) {
         throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
     }
 
-    const buffer = await response.arrayBuffer();
-	const dirName = dirname(destPath);
-	console.log(`  ->mkdirDir ${dirName}`);
-    mkdirSync(dirName, { recursive: true });
-    writeFileSync(destPath, Buffer.from(buffer));
-
-    console.log(`  -> ${destPath} (${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB)`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (digest(bytes) !== sha256) throw new Error(`Downloaded file checksum mismatch: ${destPath}`);
+    mkdirSync(dirname(destPath), { recursive: true });
+    const temporaryPath = `${destPath}.${randomUUID()}.tmp`;
+    try {
+        writeFileSync(temporaryPath, bytes, { mode: 0o600, flag: 'wx' });
+        renameSync(temporaryPath, destPath);
+    } finally {
+        rmSync(temporaryPath, { force: true });
+    }
 }
 
 async function main(): Promise<void> {
@@ -51,16 +69,11 @@ async function main(): Promise<void> {
     console.log('Downloading tunwg binaries...\n');
 
     // Download all platform binaries
-    for (const [platform, url] of Object.entries(TUNWG_RELEASES)) {
+    for (const [platform, release] of Object.entries(TUNWG_RELEASES)) {
         const filename = `tunwg-${platform}${platform.includes('win32') ? '.exe' : ''}`;
         const destPath = join(toolsDir, filename);
 
-        if (existsSync(destPath)) {
-            console.log(`Skipping ${filename} (already exists)`);
-            continue;
-        }
-
-        await downloadFile(url, destPath);
+        await downloadVerifiedFile(`${RELEASE_URL}/${release.asset}`, destPath, release.sha256);
 
         // Make executable on Unix
         if (!platform.includes('win32')) {
@@ -70,16 +83,14 @@ async function main(): Promise<void> {
 
     // Download LICENSE
     const licensePath = join(toolsDir, 'LICENSE');
-    if (!existsSync(licensePath)) {
-        await downloadFile(LICENSE_URL, licensePath);
-    } else {
-        console.log('Skipping LICENSE (already exists)');
-    }
+    await downloadVerifiedFile(LICENSE_URL, licensePath, LICENSE_SHA256);
 
     console.log('\nDone!');
 }
 
-main().catch((error) => {
-    console.error('Error:', error);
-    process.exit(1);
-});
+if (import.meta.main) {
+    main().catch((error) => {
+        console.error('Error:', error);
+        process.exit(1);
+    });
+}
