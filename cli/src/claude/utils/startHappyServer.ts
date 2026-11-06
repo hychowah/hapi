@@ -12,6 +12,7 @@ import { PeerDeliveryModeSchema, type PeerDeliveryMode } from '@/modules/pingPee
 import { logger } from "@/ui/logger";
 import { ApiSessionClient } from "@/api/apiSession";
 import { randomUUID } from "node:crypto";
+import { createMcpAuth } from '@/utils/mcpAuth';
 import {
     detectDisplayMediaMimeType,
     detectImageMimeType,
@@ -142,7 +143,7 @@ function createHapiMcpServer(
     const mcp = new McpServer({
         name: "HAPI MCP",
         version: "1.0.0",
-    });
+    }, { maxToolInputElements: 10_000 });
 
     const changeTitleInputSchema: z.ZodTypeAny = z.object({
         title: z.string().describe('The new title for the chat session'),
@@ -643,6 +644,7 @@ function readMcpSessionId(req: IncomingMessage): string | undefined {
 }
 
 export async function startHappyServer(client: ApiSessionClient, options: StartHappyServerOptions = {}) {
+    const auth = createMcpAuth();
     const emitTitleSummary = options.emitTitleSummary ?? true;
     const enableChangeTitle = options.enableChangeTitle ?? true;
     const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -657,6 +659,9 @@ export async function startHappyServer(client: ApiSessionClient, options: StartH
             options.workingDirectory
         );
         const transport = new StreamableHTTPServerTransport({
+            enableDnsRebindingProtection: true,
+            allowedHosts: [baseUrl.host],
+            maxRequestBodySize: 1024 * 1024,
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sessionId) => {
                 transports.set(sessionId, transport);
@@ -675,6 +680,15 @@ export async function startHappyServer(client: ApiSessionClient, options: StartH
 
     const server = createServer(async (req, res) => {
         try {
+            // This endpoint is for native bridge clients, never browser callers.
+            if (req.headers.host !== baseUrl.host || req.headers.origin !== undefined) {
+                res.writeHead(403, { Connection: 'close' }).end();
+                return;
+            }
+            if (!auth.accepts(req.headers.authorization)) {
+                res.writeHead(401, { Connection: 'close' }).end();
+                return;
+            }
             const sessionId = readMcpSessionId(req);
             const transport = sessionId
                 ? transports.get(sessionId)
@@ -696,7 +710,12 @@ export async function startHappyServer(client: ApiSessionClient, options: StartH
         }
     });
 
-    const baseUrl = await new Promise<URL>((resolve) => {
+    server.once('close', () => auth.dispose());
+    const baseUrl = await new Promise<URL>((resolve, reject) => {
+        server.once('error', (error) => {
+            auth.dispose();
+            reject(error);
+        });
         server.listen(0, "127.0.0.1", () => {
             const addr = server.address() as AddressInfo;
             resolve(new URL(`http://127.0.0.1:${addr.port}`));
@@ -723,6 +742,7 @@ export async function startHappyServer(client: ApiSessionClient, options: StartH
 
     return {
         url: mcpUrl,
+        authTokenFile: auth.tokenFile,
         toolNames,
         stop: () => {
             logger.debug('[hapiMCP] Stopping server');

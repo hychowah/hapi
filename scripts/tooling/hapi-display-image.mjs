@@ -16,14 +16,15 @@
  * Self-resolution (tiann/hapi#1119): $HAPI_SESSION_ID → GET /api/sessions/:id directly.
  * Picks the strict image/video tool when recognized, else display_media.
  * Prefer the MCP tools when available; this script is the shell fallback.
+ * The operator must explicitly supply the bridge's private credential path in
+ * HAPI_HTTP_MCP_TOKEN_FILE; the URL in session metadata does not grant access.
  */
 
 import { closeSync, openSync, readSync, readFileSync, lstatSync } from 'node:fs'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { connectMcpClient, HAPI_MCP_TOKEN_FILE_ENV, readMcpAuthorization } from '../../cli/src/utils/mcpAuth.ts'
 
 const HAPI_HOST = process.env.HAPI_HOST ?? 'http://localhost:3006'
-const SETTINGS = process.env.HAPI_SETTINGS ?? `${process.env.HOME}/.hapi/settings.json`
+const SETTINGS = process.env.HAPI_SETTINGS ?? `${process.env.HAPI_HOME ?? `${process.env.HOME}/.hapi`}/settings.json`
 
 const SELF_TOKENS = new Set(['self', '@self', '@me', 'current', '-'])
 
@@ -122,6 +123,9 @@ if (!isFile(imagePath)) {
     process.exit(2)
 }
 
+// Fail before contacting the hub if the operator has not authorized this path.
+readMcpAuthorization(process.env[HAPI_MCP_TOKEN_FILE_ENV])
+
 const token = process.env.CLI_API_TOKEN ?? JSON.parse(readFileSync(SETTINGS, 'utf8')).cliApiToken
 if (!token) {
     console.error('missing CLI_API_TOKEN env and no cliApiToken in settings')
@@ -209,9 +213,9 @@ if (!mcpUrl) {
 console.error(`hapi-display-image: session=${session.id} mcp=${mcpUrl}`)
 
 const mediaTool = detectMediaTool(imagePath)
-const client = new Client({ name: 'hapi-display-image', version: '1.0.0' }, { capabilities: {} })
-const transport = new StreamableHTTPClientTransport(new URL(mcpUrl))
-await client.connect(transport)
+const client = await connectMcpClient(mcpUrl, process.env[HAPI_MCP_TOKEN_FILE_ENV], {
+    name: 'hapi-display-image', version: '1.0.0',
+})
 const result = await client.callTool({
     name: mediaTool,
     arguments: { path: imagePath, title: title ?? undefined },

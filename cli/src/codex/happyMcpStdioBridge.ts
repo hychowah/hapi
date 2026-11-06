@@ -6,15 +6,15 @@
  * using the StreamableHTTPClientTransport.
  *
  * Configure the target HTTP MCP URL via env var `HAPI_HTTP_MCP_URL` or
- * via CLI flag `--url <http://127.0.0.1:PORT>`.
+ * via CLI flag `--url <http://127.0.0.1:PORT>`. HAPI_HTTP_MCP_TOKEN_FILE must
+ * point to the owner-only credential file supplied by normal session launchers.
  *
  * Note: This process must not print to stdout as it would break MCP STDIO.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { z } from 'zod';
 import { PeerDeliveryModeSchema } from '@/modules/pingPeer/deliveryMode';
 import { DISPLAY_IMAGE_PROMPT_CURSOR, DISPLAY_MEDIA_PROMPT_CURSOR, DISPLAY_VIDEO_PROMPT_CURSOR } from '@/modules/common/displayImagePrompt';
@@ -32,6 +32,7 @@ import { SESSION_NAME_MAX_LENGTH } from '@hapi/protocol';
 import { CREATABLE_AGENT_FLAVORS } from '@hapi/protocol/modes';
 import { PermissionModeSchema } from '@hapi/protocol/schemas';
 import { isPeerToolsDisabled, PEER_TOOL_NAMES } from '@/modules/common/peerTools';
+import { connectMcpClient, HAPI_MCP_TOKEN_FILE_ENV } from '@/utils/mcpAuth';
 
 const DEFAULT_TOOL_NAMES = ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'];
 
@@ -81,13 +82,9 @@ export async function runHappyMcpStdioBridge(argv: string[]): Promise<void> {
 
     async function ensureHttpClient(): Promise<Client> {
       if (httpClient) return httpClient;
-      const client = new Client(
-        { name: 'hapi-stdio-bridge', version: '1.0.0' },
-        { capabilities: {} }
-      );
-
-      const transport = new StreamableHTTPClientTransport(new URL(baseUrl));
-      await client.connect(transport);
+      const client = await connectMcpClient(baseUrl, process.env[HAPI_MCP_TOKEN_FILE_ENV], {
+        name: 'hapi-stdio-bridge', version: '1.0.0',
+      });
       httpClient = client;
       return client;
     }

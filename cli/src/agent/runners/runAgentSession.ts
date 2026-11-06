@@ -7,6 +7,7 @@ import { convertAgentMessage } from '@/agent/messageConverter';
 import { PermissionAdapter } from '@/agent/permissionAdapter';
 import type { AgentBackend, PromptContent } from '@/agent/types';
 import { startHappyServer } from '@/claude/utils/startHappyServer';
+import { HAPI_MCP_TOKEN_FILE_ENV } from '@/utils/mcpAuth';
 import { getHappyCliCommand } from '@/utils/spawnHappyCLI';
 import { registerKillSessionHandler } from '@/claude/registerKillSessionHandler';
 import { bootstrapSession } from '@/agent/sessionFactory';
@@ -90,7 +91,7 @@ export async function runAgentSession(opts: {
             name: 'happy',
             command: bridgeCommand.command,
             args: bridgeCommand.args,
-            env: []
+            env: [{ name: HAPI_MCP_TOKEN_FILE_ENV, value: happyServer.authTokenFile }]
         }
     ];
 

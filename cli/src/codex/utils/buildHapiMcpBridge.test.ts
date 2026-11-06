@@ -13,6 +13,7 @@ vi.mock('@/claude/utils/startHappyServer', () => ({
         harness.startOptions = options
         return {
             url: 'http://127.0.0.1:43006/',
+            authTokenFile: '/private/mcp-token',
             toolNames: options.skillLookup
                 ? ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer', 'skill_lookup']
                 : ['change_title', 'display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'],
@@ -85,6 +86,7 @@ describe('buildHapiMcpBridge skill lookup config', () => {
             list_peers: { approval_mode: 'approve' },
             skill_lookup: { approval_mode: 'approve' }
         })
+        expect(bridge.mcpServers.hapi.env).toEqual({ HAPI_HTTP_MCP_TOKEN_FILE: '/private/mcp-token' })
     })
 
     it('does not expose skill_lookup for native-skill bridge callers', async () => {

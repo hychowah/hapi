@@ -10,6 +10,7 @@ import { buildHubRequestHeaders } from '@/api/hubExtraHeaders'
 import { readSettings } from '@/persistence'
 import { projectPath } from '@/projectPath'
 import { cursorHapiMcpServerId } from '@/cursor/utils/cursorMcpOverlay'
+import { HAPI_MCP_TOKEN_FILE_ENV, readMcpAuthorization } from '@/utils/mcpAuth'
 
 export type InlineMediaDoctorCheck = {
     ok: boolean
@@ -148,6 +149,19 @@ export async function runDoctorInlineMedia(): Promise<number> {
         detail: sdkOk ? 'resolvable from cli or repo root' : 'not found — optional outside source checkout',
     })
 
+    let privateCredentialAvailable = false
+    try {
+        readMcpAuthorization(process.env[HAPI_MCP_TOKEN_FILE_ENV])
+        privateCredentialAvailable = true
+    } catch {
+        // Optional source-checkout fallback; normal MCP subprocesses get their own credential.
+    }
+    checks.push({
+        ok: privateCredentialAvailable,
+        label: HAPI_MCP_TOKEN_FILE_ENV,
+        detail: privateCredentialAvailable ? 'private credential supplied' : 'not supplied — shell fallback unavailable',
+    })
+
     const envSessionId = process.env.HAPI_SESSION_ID
     if (envSessionId) {
         checks.push({
@@ -192,7 +206,7 @@ export async function runDoctorInlineMedia(): Promise<number> {
 
     const withBridge = bridges.filter((b) => b.hapiMcpUrl)
     const listOmitsMcp = bridges.some((b) => b.hapiMcpUrl && !b.listShowsMcpUrl)
-    const shellFallbackAvailable = scriptExists && sdkOk
+    const shellFallbackAvailable = scriptExists && sdkOk && privateCredentialAvailable
 
     console.log(chalk.bold('\nActive sessions'))
     if (bridges.length === 0) {
@@ -207,9 +221,6 @@ export async function runDoctorInlineMedia(): Promise<number> {
             )
             if (b.hapiMcpUrl) {
                 console.log(chalk.gray(`    mcp: ${b.hapiMcpUrl}`))
-                if (shellFallbackAvailable) {
-                    console.log(chalk.gray(`    ${formatInlineMediaCommand(scriptPath, b.prefix)}`))
-                }
             }
         }
     }
@@ -234,16 +245,10 @@ export async function runDoctorInlineMedia(): Promise<number> {
     console.log(chalk.bold('\nAgent inline path'))
     console.log(chalk.gray('  1. MCP tool display_image / display_video / display_media in the running session (ACP flavors via hapi bridge)'))
     if (shellFallbackAvailable) {
-        console.log(chalk.gray('  2. Shell fallback (HAPI session id prefix, not cursorSessionId):'))
-        if (withBridge.length > 0) {
-            console.log(chalk.green(`    ${formatInlineMediaCommand(scriptPath, withBridge[0].prefix)}`))
-        } else if (envSessionId) {
-            console.log(chalk.green(`    ${formatInlineMediaCommand(scriptPath, envSessionId.slice(0, 8))}`))
-        } else {
-            console.log(chalk.gray(`    ${formatInlineMediaCommand(scriptPath, '<hapi-session-prefix>')}`))
-        }
+        console.log(chalk.gray('  2. Shell fallback: the supplied credential must belong to the chosen session.'))
+        console.log(chalk.gray(`    ${formatInlineMediaCommand(scriptPath, '<matching-session-prefix>')}`))
     } else {
-        console.log(chalk.gray('  2. Shell fallback unavailable (packaged install / no repo checkout) — use MCP tools only'))
+        console.log(chalk.gray('  2. Shell fallback unavailable (requires a source checkout, SDK and private bridge credential) — use MCP tools only'))
     }
 
     // Core health: hub auth + live bridge or session id. Repo shell helper is optional.

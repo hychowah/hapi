@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMcpAuth, HAPI_MCP_TOKEN_FILE_ENV } from '@/utils/mcpAuth'
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>
 
@@ -45,10 +46,34 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 import { runHappyMcpStdioBridge } from './happyMcpStdioBridge'
 
 describe('runHappyMcpStdioBridge tool forwarding', () => {
+    let auth: ReturnType<typeof createMcpAuth>
+    const originalTokenFile = process.env[HAPI_MCP_TOKEN_FILE_ENV]
     beforeEach(() => {
+        auth = createMcpAuth()
+        process.env[HAPI_MCP_TOKEN_FILE_ENV] = auth.tokenFile
         harness.tools.clear()
         harness.configs.clear()
         harness.callTool.mockClear()
+    })
+    afterEach(() => {
+        auth.dispose()
+        if (originalTokenFile === undefined) delete process.env[HAPI_MCP_TOKEN_FILE_ENV]
+        else process.env[HAPI_MCP_TOKEN_FILE_ENV] = originalTokenFile
+    })
+
+    it('does not forward calls without the private credential', async () => {
+        delete process.env[HAPI_MCP_TOKEN_FILE_ENV]
+        await runHappyMcpStdioBridge(['--url', 'http://127.0.0.1:43006', '--tools', 'display_media'])
+        const result = await harness.tools.get('display_media')?.({ path: '/tmp/sample.wav' })
+        expect(result).toMatchObject({ isError: true })
+        expect(harness.callTool).not.toHaveBeenCalled()
+    })
+
+    it('never forwards the capability to a non-loopback endpoint', async () => {
+        await runHappyMcpStdioBridge(['--url', 'https://untrusted.invalid', '--tools', 'display_media'])
+        const result = await harness.tools.get('display_media')?.({ path: '/tmp/sample.wav' })
+        expect(result).toMatchObject({ isError: true })
+        expect(harness.callTool).not.toHaveBeenCalled()
     })
 
     it('describes display_image as user output rather than image input', async () => {

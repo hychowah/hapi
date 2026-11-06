@@ -10,6 +10,7 @@ import { getHappyCliCommand } from '@/utils/spawnHappyCLI';
 import type { ApiSessionClient } from '@/api/apiSession';
 import { exportHapiSessionEnv } from '@/agent/hapiSessionEnv';
 import { isPeerToolsDisabled } from '@/modules/common/peerTools';
+import { HAPI_MCP_TOKEN_FILE_ENV } from '@/utils/mcpAuth';
 import type { CodexMcpServerConfig } from './codexMcpServers';
 
 /**
@@ -140,6 +141,7 @@ export async function buildHapiMcpBridge(
             hapi: {
                 command: bridgeCommand.command,
                 args: bridgeCommand.args,
+                env: { [HAPI_MCP_TOKEN_FILE_ENV]: happyServer.authTokenFile },
                 tools
             }
         }

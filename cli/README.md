@@ -281,6 +281,7 @@ DSH owns MCP injection, live tool/reasoning telemetry and permission policy.
 - `HAPI_DSH_ACP_CONFIG` - Optional config path for the configured DSH ACP server (`--config` with `HAPI_DSH_ACP_COMMAND`, `--patch` overlay on the default official CLI).
 - `HAPI_DSH_ACP_ARGS_JSON` - Optional JSON array of ACP server arguments.
 - `HAPI_HTTP_MCP_URL` - Default MCP target for `hapi mcp`.
+- `HAPI_HTTP_MCP_TOKEN_FILE` - Required owner-only capability file for `hapi mcp` and the source-checkout media helper. Normal session launchers supply this to the MCP subprocess automatically; it is not published in hub metadata or automatically exported to agent shells.
 
 ### Runner
 
@@ -313,11 +314,13 @@ change its identity.
 On a remote runner host, configure the matching hub URL and token so shell
 commands reach the same hub (`hapi auth login` saves the token).
 
-For example, this source-checkout helper displays an image in the current
-session when MCP is unavailable:
+For example, an operator can explicitly authorize the source-checkout helper
+with the current bridge's private credential file. Without that file the helper
+fails closed; prefer the session's normal MCP tools:
 
 ```bash
-bun scripts/tooling/hapi-display-image.mjs /absolute/path/to/image.png "optional title"
+HAPI_HTTP_MCP_TOKEN_FILE=/private/path/to/bridge/token \
+  bun scripts/tooling/hapi-display-image.mjs /absolute/path/to/image.png "optional title"
 ```
 
 ## Session lifecycle invariants

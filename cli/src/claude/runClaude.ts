@@ -8,6 +8,8 @@ import { classifyClaudeSlashCatalog, extractSDKMetadata } from '@/claude/sdk/met
 import { parseSpecialCommand } from '@/parsers/specialCommands';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { startHappyServer, toClaudeAllowedHapiMcpTools } from '@/claude/utils/startHappyServer';
+import { getHappyCliCommand } from '@/utils/spawnHappyCLI';
+import { HAPI_MCP_TOKEN_FILE_ENV } from '@/utils/mcpAuth';
 import { startHookServer } from '@/claude/utils/startHookServer';
 import { generateHookSettingsFile, cleanupHookSettingsFile } from '@/modules/common/hooks/generateHookSettings';
 import { forwardClaudeAutoCompactionStart } from './utils/autoCompactionHook';
@@ -154,6 +156,10 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
 
     // Start HAPI MCP server (pass session cwd so spawn_peer "." anchors here)
     const happyServer = await startHappyServer(session, { workingDirectory });
+    const mcpBridge = getHappyCliCommand([
+        'mcp', '--url', happyServer.url, '--tools', happyServer.toolNames.join(','),
+        '--hapi-session-id', session.sessionId,
+    ]);
     logger.debug(`[START] HAPI MCP server started at ${happyServer.url}`);
 
     const formatFailureReason = (message: string): string => {
@@ -610,8 +616,10 @@ export async function runClaude(options: StartOptions = {}): Promise<void> {
             },
             mcpServers: {
                 'hapi': {
-                    type: 'http' as const,
-                    url: happyServer.url,
+                    type: 'stdio' as const,
+                    command: mcpBridge.command,
+                    args: mcpBridge.args,
+                    env: { [HAPI_MCP_TOKEN_FILE_ENV]: happyServer.authTokenFile },
                 }
             },
             session,

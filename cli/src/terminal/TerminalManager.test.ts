@@ -35,6 +35,7 @@ describe('buildFilteredEnv web Terminal PTY', () => {
             CURSOR_AGENT_SESSION_ID: 'cursor-sess',
             CLAUDECODE: '1',
             CLI_API_TOKEN: 'secret-token',
+            HAPI_HTTP_MCP_TOKEN_FILE: '/private/bridge-token',
             OPENAI_API_KEY: 'sk-test',
             TERM: 'xterm-256color',
         })
@@ -47,6 +48,7 @@ describe('buildFilteredEnv web Terminal PTY', () => {
         expect(env.CURSOR_AGENT_SESSION_ID).toBeUndefined()
         expect(env.CLAUDECODE).toBeUndefined()
         expect(env.CLI_API_TOKEN).toBeUndefined()
+        expect(env.HAPI_HTTP_MCP_TOKEN_FILE).toBeUndefined()
         expect(env.OPENAI_API_KEY).toBeUndefined()
     })
 

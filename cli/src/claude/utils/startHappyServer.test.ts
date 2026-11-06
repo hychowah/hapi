@@ -1,13 +1,157 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createServer, request } from 'node:http'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { HAPI_MCP_TOKEN_FILE_ENV, readMcpAuthorization } from '@/utils/mcpAuth'
+import { getHappyCliCommand } from '@/utils/spawnHappyCLI'
 import type { ApiSessionClient } from '@/api/apiSession'
 import * as peerMessages from '@/modules/pingPeer/pingPeer'
 import * as peerSpawn from '@/modules/spawnPeer/spawnPeer'
 import { startHappyServer, toClaudeAllowedHapiMcpTools } from './startHappyServer'
+
+describe('MCP HTTP authentication boundary', () => {
+    const servers: Awaited<ReturnType<typeof startHappyServer>>[] = []
+    const clients: Client[] = []
+    afterEach(async () => {
+        await Promise.all(clients.splice(0).map(client => client.close()))
+        servers.splice(0).forEach(server => server.stop())
+    })
+
+    async function start() {
+        const metadata = vi.fn()
+        const server = await startHappyServer({ updateMetadata: metadata } as unknown as ApiSessionClient)
+        servers.push(server)
+        return { server, metadata }
+    }
+
+    it('rejects absent, incorrect and other-bridge capabilities before parsing input', async () => {
+        const { server } = await start()
+        const { server: other } = await start()
+        for (const authorization of [undefined, 'Bearer wrong', readMcpAuthorization(other.authTokenFile)]) {
+            const response = await fetch(server.url, {
+                method: 'POST',
+                headers: authorization ? { Authorization: authorization } : {},
+                body: 'invalid JSON',
+            })
+            expect(response.status).toBe(401)
+        }
+    })
+
+    it('rejects browser origins even when a valid capability is supplied', async () => {
+        const { server } = await start()
+        const response = await fetch(server.url, {
+            headers: { Authorization: readMcpAuthorization(server.authTokenFile), Origin: 'https://untrusted.invalid' },
+        })
+        expect(response.status).toBe(403)
+    })
+
+    it('rejects foreign Host headers with a valid capability', async () => {
+        const { server } = await start()
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+            const req = request(server.url, {
+                headers: { Authorization: readMcpAuthorization(server.authTokenFile), Host: 'untrusted.invalid' },
+            }, response => {
+                response.resume()
+                response.once('end', () => resolve(response.statusCode))
+            })
+            req.once('error', reject)
+            req.end()
+        })
+        expect(status).toBe(403)
+    })
+
+    it('allows authenticated native MCP clients without publishing the capability', async () => {
+        const { server, metadata } = await start()
+        const authorization = readMcpAuthorization(server.authTokenFile)
+        const client = new Client({ name: 'authenticated-test', version: '1.0.0' })
+        clients.push(client)
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+            requestInit: { headers: { Authorization: authorization } },
+        }))
+        expect((await client.listTools()).tools.map(tool => tool.name)).toContain('change_title')
+        const published = metadata.mock.calls[0][0]({})
+        expect(published.hapiMcpUrl).toBe(server.url)
+        expect(JSON.stringify(published)).not.toContain(authorization.slice(7))
+        expect(JSON.stringify(published)).not.toContain(server.authTokenFile)
+    })
+
+    it('bounds authenticated request bodies before tool execution', async () => {
+        const { server } = await start()
+        const response = await fetch(server.url, {
+            method: 'POST',
+            headers: {
+                Authorization: readMcpAuthorization(server.authTokenFile),
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/event-stream',
+            },
+            body: JSON.stringify({ padding: 'x'.repeat(1024 * 1024) }),
+        })
+        expect(response.status).toBe(413)
+    })
+
+    it('forwards authenticated calls through a real stdio bridge subprocess', async () => {
+        const { server } = await start()
+        const command = getHappyCliCommand(['mcp', '--url', server.url, '--tools', 'change_title'])
+        const client = new Client({ name: 'stdio-auth-test', version: '1.0.0' })
+        clients.push(client)
+        await client.connect(new StdioClientTransport({
+            ...command,
+            env: {
+                HAPI_HOME: process.env.HAPI_HOME!,
+                [HAPI_MCP_TOKEN_FILE_ENV]: server.authTokenFile,
+            },
+            stderr: 'pipe',
+        }))
+        const result = await client.callTool({ name: 'change_title', arguments: { title: '' } })
+        expect(JSON.stringify(result)).toContain('Title must not be empty')
+    }, 15_000)
+
+    it('authenticates the source-checkout media helper and rejects a missing capability', async () => {
+        const sendAgentMessage = vi.fn()
+        const server = await startHappyServer({
+            updateMetadata: vi.fn(), sendAgentMessage, sendClaudeSessionMessage: vi.fn(),
+        } as unknown as ApiSessionClient)
+        servers.push(server)
+        const directory = await mkdtemp(join(tmpdir(), 'hapi-media-helper-test-'))
+        const imagePath = join(directory, 'image.png')
+        await writeFile(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+        const hub = createServer((req, res) => {
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify(req.url === '/api/auth'
+                ? { token: 'test-jwt' }
+                : { session: { id: 'helper-session', metadata: { hapiMcpUrl: server.url } } }))
+        })
+        await new Promise<void>(resolve => hub.listen(0, '127.0.0.1', resolve))
+        try {
+            const address = hub.address() as { port: number }
+            const env: NodeJS.ProcessEnv = {
+                ...process.env,
+                HAPI_HOST: `http://127.0.0.1:${address.port}`,
+                HAPI_SESSION_ID: 'helper-session',
+                [HAPI_MCP_TOKEN_FILE_ENV]: server.authTokenFile,
+            }
+            const command = [fileURLToPath(new URL('../../../../scripts/tooling/hapi-display-image.mjs', import.meta.url)), imagePath]
+            const run = promisify(execFile)
+            const result = await run(process.env.HAPI_BUN_EXEC!, command, { env, timeout: 15_000 })
+            expect(result.stdout).toContain('Displayed image')
+            expect(sendAgentMessage).toHaveBeenCalledTimes(1)
+            delete env[HAPI_MCP_TOKEN_FILE_ENV]
+            await expect(run(process.env.HAPI_BUN_EXEC!, command, { env, timeout: 15_000 }))
+                .rejects.toThrow('Missing HAPI MCP credential file')
+            expect(sendAgentMessage).toHaveBeenCalledTimes(1)
+        } finally {
+            await new Promise<void>(resolve => hub.close(() => resolve()))
+            await rm(directory, { recursive: true, force: true })
+        }
+    }, 20_000)
+})
 
 type ToolResult = {
     content?: Array<{ type: string; text?: string }>
@@ -66,7 +210,7 @@ describe('startHappyServer skill_lookup', () => {
             { name: 'hapi-skill-lookup-test', version: '1.0.0' },
             { capabilities: {} }
         )
-        await client.connect(new StreamableHTTPClientTransport(new URL(server.url)))
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: { Authorization: readMcpAuthorization(server.authTokenFile) } } }))
         return client
     }
 
@@ -306,7 +450,7 @@ describe('startHappyServer skill_lookup', () => {
         const mcp = new Client({ name: 'hapi-test', version: '1.0.0' })
         client = mcp
 
-        await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url)))
+        await mcp.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: { Authorization: readMcpAuthorization(server.authTokenFile) } } }))
         const tools = await mcp.listTools()
 
         expect(server.toolNames).toEqual(['display_image', 'display_video', 'display_media', 'list_peers', 'ping_peer', 'inspect_peer', 'spawn_peer'])
@@ -341,7 +485,7 @@ describe('startHappyServer change_title', () => {
             { name: 'hapi-change-title-test', version: '1.0.0' },
             { capabilities: {} }
         )
-        await client.connect(new StreamableHTTPClientTransport(new URL(server.url)))
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: { Authorization: readMcpAuthorization(server.authTokenFile) } } }))
         return client
     }
 
@@ -571,7 +715,7 @@ describe('startHappyServer peer tools kill switch', () => {
             { name: 'hapi-peer-tools-test', version: '1.0.0' },
             { capabilities: {} }
         )
-        await client.connect(new StreamableHTTPClientTransport(new URL(server.url)))
+        await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: { Authorization: readMcpAuthorization(server.authTokenFile) } } }))
         return { url: server.url, toolNames: server.toolNames }
     }
 
