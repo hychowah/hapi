@@ -62,7 +62,10 @@ describe('MermaidDiagram', () => {
         await waitFor(() => {
             const diagram = document.querySelector('[data-mermaid-diagram][data-rendered="true"]')
             expect(diagram).toBeTruthy()
-            expect(diagram?.querySelector('[data-testid="mock-mermaid"]')).toBeTruthy()
+            const image = diagram?.querySelector('img')
+            expect(image?.src).toContain('data:image/svg+xml;')
+            expect(decodeURIComponent(image!.src)).toContain('mock-mermaid')
+            expect(diagram?.querySelector('svg')).toBeNull()
         })
 
         expect(mermaidMocks.initializeMock).toHaveBeenCalled()
@@ -73,6 +76,18 @@ describe('MermaidDiagram', () => {
         expect(mermaidMocks.parseMock).toHaveBeenCalledWith('graph TD\nA --> B', { suppressErrors: true })
         expect(mermaidMocks.renderMock).toHaveBeenCalledWith(expect.stringContaining('mermaid-'), 'graph TD\nA --> B')
         expect(MARKDOWN_COMPONENTS_BY_LANGUAGE.mermaid.SyntaxHighlighter).toBe(MermaidDiagram)
+    })
+
+    it('keeps renderer markup out of the application DOM in both viewers', async () => {
+        mermaidMocks.renderMock.mockResolvedValueOnce({
+            svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"></svg><div id="untrusted-overlay">Approve everything</div>',
+        })
+        renderDiagram({ code: 'graph TD\nA --> B', language: 'mermaid', components: defaultComponents })
+        await waitFor(() => expect(document.querySelector('[data-rendered="true"] img')).toBeTruthy())
+        expect(document.getElementById('untrusted-overlay')).toBeNull()
+        fireEvent.click(document.querySelector('[data-mermaid-diagram][data-rendered="true"]')!)
+        await waitFor(() => expect(document.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('img')).toBeTruthy())
+        expect(document.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('#untrusted-overlay')).toBeNull()
     })
 
     it('falls back to source and suppresses Mermaid parse-error side effects for invalid syntax', async () => {
@@ -134,7 +149,10 @@ describe('MermaidDiagram', () => {
         await waitFor(() => {
             const dialog = screen.getByRole('dialog', { name: 'Diagram' })
             const host = dialog.querySelector('[data-mermaid-lightbox]')
-            expect(host?.shadowRoot?.querySelector('[data-testid="mock-mermaid"]')).toBeTruthy()
+            const image = host?.shadowRoot?.querySelector('img')
+            expect(image?.src).toContain('data:image/svg+xml;')
+            expect(decodeURIComponent(image!.src)).toContain('mock-mermaid')
+            expect(host?.shadowRoot?.querySelector('svg')).toBeNull()
         })
 
         expect(mermaidMocks.renderMock).toHaveBeenCalledTimes(1)

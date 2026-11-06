@@ -29,6 +29,15 @@ describe('getMermaidSvgLayoutSize', () => {
 })
 
 describe('normalizeMermaidSvgForStandaloneDisplay', () => {
+    it('keeps a single root height when replacing a relative width', () => {
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="565" viewBox="0 -25 700 540"></svg>'
+        const prepared = normalizeMermaidSvgForStandaloneDisplay(svg)
+        const parsed = new DOMParser().parseFromString(prepared, 'image/svg+xml')
+        expect(parsed.querySelector('parsererror')).toBeNull()
+        expect(parsed.documentElement.getAttribute('width')).toBe('700')
+        expect(parsed.documentElement.getAttribute('height')).toBe('540')
+    })
+
     it('replaces width="100%" with explicit viewBox dimensions', () => {
         const svg = '<svg id="root" viewBox="0 0 200 80" width="100%" style="max-width: 320px;"><rect width="10"/></svg>'
         const prepared = normalizeMermaidSvgForStandaloneDisplay(svg)

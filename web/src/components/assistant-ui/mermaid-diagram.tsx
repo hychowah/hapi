@@ -5,7 +5,6 @@ import {
     useRef,
     useState,
     type ComponentPropsWithoutRef,
-    type Ref,
     type SyntheticEvent,
 } from 'react'
 import { ZoomableLightbox } from '@/components/ZoomableLightbox'
@@ -149,43 +148,28 @@ export function getMermaidSvgLayoutSize(svg: string): { width: number; height: n
 
 /** Mermaid often emits width="100%"; normalize before rasterizing for the lightbox. */
 export function normalizeMermaidSvgForStandaloneDisplay(svg: string): string {
-    let result = svg
-    const viewBoxSize = getMermaidSvgLayoutSize(result)
-    if (!viewBoxSize) return result
+    const viewBoxSize = getMermaidSvgLayoutSize(svg)
+    if (!viewBoxSize) return svg
 
     const { width, height } = viewBoxSize
-    result = result.replace(/\swidth="100%"/gi, '')
-    result = result.replace(/\sheight="100%"/gi, '')
+    return svg.replace(/<svg\b[^>]*>/i, (rootTag) => {
+        // A repeated width/height is tolerated in HTML but invalid in an SVG image.
+        let result = rootTag.replace(/\s(?:width|height)=(["'])[^"']*\1/gi, '')
 
-    if (/\sstyle="/i.test(result)) {
-        result = result.replace(
-            /(<svg[^>]*?\sstyle=")([^"]*)(")/i,
-            (_full, prefix: string, style: string, suffix: string) => {
-                const cleaned = style
-                    .replace(/(?:^|;)\s*max-width:\s*[^;]+/gi, '')
-                    .replace(/(?:^|;)\s*width:\s*[^;]+/gi, '')
-                    .replace(/(?:^|;)\s*height:\s*[^;]+/gi, '')
-                    .replace(/^;+|;+$/g, '')
-                    .replace(/;\s*;/g, ';')
-                    .trim()
-                const nextStyle = cleaned
-                    ? `${cleaned};width:${width}px;height:${height}px`
-                    : `width:${width}px;height:${height}px`
-                return `${prefix}${nextStyle}${suffix}`
-            },
-        )
-    } else {
-        result = result.replace(
-            /<svg/i,
-            `<svg width="${width}" height="${height}"`,
-        )
-    }
-
-    if (!/\bwidth="/i.test(result.split('>')[0] ?? '')) {
-        result = result.replace(/<svg/i, `<svg width="${width}" height="${height}"`)
-    }
-
-    return result
+        const stylePattern = /\sstyle=(["'])(.*?)\1/i
+        const styleMatch = result.match(stylePattern)
+        const quote = styleMatch?.[1] ?? '"'
+        const cleaned = (styleMatch?.[2] ?? '')
+            .replace(/(?:^|;)\s*max-width:\s*[^;]+/gi, '')
+            .replace(/(?:^|;)\s*width:\s*[^;]+/gi, '')
+            .replace(/(?:^|;)\s*height:\s*[^;]+/gi, '')
+            .replace(/^;+|;+$/g, '')
+            .replace(/;\s*;/g, ';')
+            .trim()
+        const style = `${cleaned ? `${cleaned};` : ''}width:${width}px;height:${height}px`
+        result = result.replace(stylePattern, '')
+        return result.replace(/<svg\b/i, `<svg width="${width}" height="${height}" style=${quote}${style}${quote}`)
+    })
 }
 
 function MermaidFallback(
@@ -220,49 +204,30 @@ function MermaidFallback(
     )
 }
 
-function MermaidSvgContent(props: { svg: string; className?: string; hostRef?: Ref<HTMLDivElement> }) {
+function MermaidSvgContent(props: { svg: string; className?: string }) {
     return (
         <div
-            ref={props.hostRef}
-            className={cn('min-w-fit [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full', props.className)}
-            dangerouslySetInnerHTML={{ __html: props.svg }}
-        />
+            className={cn('w-full', props.className)}
+        >
+            <img
+                src={mermaidImageSource(props.svg)}
+                alt="Diagram"
+                draggable={false}
+                className="mx-auto h-auto max-w-full pointer-events-none"
+                style={{ maxWidth: 'min(100%, 48rem)' }}
+            />
+        </div>
     )
 }
 
-/** Prefer viewBox layout; use getBBox when Mermaid pads the viewBox (e.g. gitGraph). */
-export function resolveMermaidLightboxFitSize(
-    svgElement: SVGSVGElement | null,
-    svgString: string,
-): { width: number; height: number } | null {
-    const fromViewBox = getMermaidSvgLayoutSize(svgString)
-    if (!svgElement) return fromViewBox
-
-    try {
-        const bbox = svgElement.getBBox()
-        if (bbox.width <= 0 || bbox.height <= 0) return fromViewBox
-        if (!fromViewBox) return { width: bbox.width, height: bbox.height }
-
-        const viewBoxArea = fromViewBox.width * fromViewBox.height
-        const bboxArea = bbox.width * bbox.height
-        if (viewBoxArea > bboxArea * 2) {
-            return { width: bbox.width, height: bbox.height }
-        }
-    } catch {
-        // getBBox unavailable (some test environments)
-    }
-
-    return fromViewBox
+// SVG image documents cannot execute scripts or style the surrounding approval UI.
+function mermaidImageSource(svg: string): string {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(normalizeMermaidSvgForStandaloneDisplay(svg))}`
 }
 
 /**
- * Shadow root isolates duplicate mermaid ids from the inline diagram in the page.
- *
- * Mermaid emits `width="100%"` on every diagram. Inside a shadow root whose host
- * has no explicit size, that collapses to zero in Chromium for most diagram types
- * (only ones that ship pixel attrs - e.g. `journey` - happen to render). Strip
- * the relative size and bake explicit pixels from the viewBox before injecting,
- * and give the host an inline-block layout so it sizes to the SVG.
+ * Use the same inert image boundary in the viewer as in the inline diagram.
+ * Explicit viewBox dimensions preserve the lightbox's zoom/fit measurements.
  */
 function MermaidLightboxSvg(props: { svg: string }) {
     const hostRef = useRef<HTMLDivElement>(null)
@@ -272,14 +237,13 @@ function MermaidLightboxSvg(props: { svg: string }) {
         if (!host) return
 
         const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' })
-        const normalized = normalizeMermaidSvgForStandaloneDisplay(props.svg)
-        root.innerHTML = [
-            '<style>',
-            ':host{display:inline-block;line-height:0}',
-            'svg{display:block;max-width:none;max-height:none}',
-            '</style>',
-            normalized,
-        ].join('')
+        const image = document.createElement('img')
+        image.src = mermaidImageSource(props.svg)
+        image.alt = 'Diagram'
+        image.draggable = false
+        image.style.cssText = 'display:block;max-width:none;max-height:none'
+        host.style.cssText = 'display:inline-block;line-height:0'
+        root.replaceChildren(image)
     }, [props.svg])
 
     return <div ref={hostRef} className="aui-mermaid-lightbox-host" data-mermaid-lightbox />
@@ -297,8 +261,6 @@ export function MermaidDiagram(props: SyntaxHighlighterProps) {
     const [errorReason, setErrorReason] = useState<string | null>(null)
     const [svg, setSvg] = useState<string | null>(null)
     const [lightboxOpen, setLightboxOpen] = useState(false)
-    const [lightboxFitSize, setLightboxFitSize] = useState<{ width: number; height: number } | null>(null)
-    const inlineHostRef = useRef<HTMLDivElement>(null)
     const id = useId().replace(/:/g, '-')
     const openLabel = t('mermaid.openFullscreen')
     const viewerLabel = t('mermaid.viewerTitle')
@@ -311,8 +273,6 @@ export function MermaidDiagram(props: SyntaxHighlighterProps) {
         event.preventDefault()
         event.stopPropagation()
         if (!svg) return
-        const inlineSvg = inlineHostRef.current?.querySelector('svg') ?? null
-        setLightboxFitSize(resolveMermaidLightboxFitSize(inlineSvg, svg))
         setLightboxOpen(true)
     }
 
@@ -363,7 +323,7 @@ export function MermaidDiagram(props: SyntaxHighlighterProps) {
         }
     }, [id, props.code, theme])
 
-    const lightboxLayoutSize = lightboxFitSize ?? (svg ? getMermaidSvgLayoutSize(svg) : null)
+    const lightboxLayoutSize = svg ? getMermaidSvgLayoutSize(svg) : null
 
     if (renderError || !svg) {
         return (
@@ -392,7 +352,7 @@ export function MermaidDiagram(props: SyntaxHighlighterProps) {
                 data-mermaid-e2e-case={e2eCaseId}
                 data-mermaid-source={encodeURIComponent(props.code)}
             >
-                <MermaidSvgContent svg={svg} hostRef={inlineHostRef} />
+                <MermaidSvgContent svg={svg} />
             </button>
 
             <ZoomableLightbox

@@ -51,18 +51,21 @@ export type LiveLightboxMetrics = {
     inlineH: number
     lightboxW: number
     lightboxH: number
-    hasShadowSvg: boolean
+    hasDiagramImage: boolean
     shapeTotal: number
     coverage: number
 }
 
 export async function readLiveLightboxMetrics(page: Page): Promise<LiveLightboxMetrics> {
     return page.evaluate(() => {
-        const inlineSvg = document.querySelector('[data-mermaid-diagram][data-rendered="true"] svg')
+        const inlineSvg = document.querySelector('[data-mermaid-diagram][data-rendered="true"] img')
         const inlineBox = inlineSvg?.getBoundingClientRect()
         const host = document.querySelector('[data-mermaid-lightbox]')
-        const lightboxSvg = host?.shadowRoot?.querySelector('svg')
-        const lightboxBox = lightboxSvg?.getBoundingClientRect()
+        const image = host?.shadowRoot?.querySelector('img')
+        const lightboxSvg = image ? new DOMParser().parseFromString(
+            decodeURIComponent(image.src.slice(image.src.indexOf(',') + 1)), 'image/svg+xml',
+        ).querySelector('svg') : null
+        const lightboxBox = image?.getBoundingClientRect()
         const vw = window.visualViewport?.width ?? window.innerWidth
         const vh = window.visualViewport?.height ?? window.innerHeight
         const shapes =
@@ -74,7 +77,7 @@ export async function readLiveLightboxMetrics(page: Page): Promise<LiveLightboxM
             inlineH: inlineBox?.height ?? 0,
             lightboxW: lightboxBox?.width ?? 0,
             lightboxH: lightboxBox?.height ?? 0,
-            hasShadowSvg: Boolean(lightboxSvg),
+            hasDiagramImage: Boolean(image?.complete && image.naturalWidth > 0),
             shapeTotal: shapes,
             coverage: Math.max((lightboxBox?.width ?? 0) / vw, (lightboxBox?.height ?? 0) / vh),
         }

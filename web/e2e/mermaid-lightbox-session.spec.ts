@@ -47,7 +47,7 @@ test.describe('mermaid lightbox (live HAPI session)', () => {
 
             await diagram.scrollIntoViewIfNeeded()
             const before = await diagram.evaluate((el) => {
-                const svg = el.querySelector('svg')
+                const svg = el.querySelector('img')
                 const box = svg?.getBoundingClientRect()
                 return { inlineW: box?.width ?? 0, inlineH: box?.height ?? 0 }
             })
@@ -57,7 +57,7 @@ test.describe('mermaid lightbox (live HAPI session)', () => {
             const lightboxKind = await page.waitForFunction(() => {
                 const dialog = document.querySelector('[role="dialog"]')
                 if (!dialog) return 'no-dialog'
-                const shadowSvg = dialog.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('svg')
+                const shadowSvg = dialog.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('img')
                 if (shadowSvg) {
                     const box = shadowSvg.getBoundingClientRect()
                     if (box.width > 0 && box.height > 0) return 'shadow'
@@ -81,7 +81,7 @@ test.describe('mermaid lightbox (live HAPI session)', () => {
                     ? (after.lightboxW * after.lightboxH) / (before.inlineW * before.inlineH)
                     : 0
 
-            expect(after.hasShadowSvg, `${caseId}: shadow SVG in live chat`).toBe(true)
+            expect(after.hasDiagramImage, `${caseId}: loaded diagram image in live chat`).toBe(true)
             expect(after.shapeTotal, `${caseId}: diagram shapes`).toBeGreaterThan(0)
             expect(after.coverage, `${caseId}: viewport coverage`).toBeGreaterThanOrEqual(MIN_COVERAGE)
             expect(
@@ -91,7 +91,10 @@ test.describe('mermaid lightbox (live HAPI session)', () => {
 
             if (caseId === 'sequence') {
                 const seqShapes = await page.evaluate(() => {
-                    const svg = document.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('svg')
+                    const image = document.querySelector('[data-mermaid-lightbox]')?.shadowRoot?.querySelector('img')
+                    const svg = image ? new DOMParser().parseFromString(
+                        decodeURIComponent(image.src.slice(image.src.indexOf(',') + 1)), 'image/svg+xml',
+                    ).querySelector('svg') : null
                     return {
                         rect: svg?.querySelectorAll('rect').length ?? 0,
                         line: svg?.querySelectorAll('line').length ?? 0,

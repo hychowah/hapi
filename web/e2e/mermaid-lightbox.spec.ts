@@ -5,7 +5,7 @@ const MIN_COVERAGE = Number(process.env.MERMAID_E2E_MIN_COVERAGE ?? '0.35')
 const MIN_SVG_PX = Number(process.env.MERMAID_E2E_MIN_SVG_PX ?? '200')
 
 type LightboxMetrics = {
-    hasShadowSvg: boolean
+    hasDiagramImage: boolean
     usesDataUrlImg: boolean
     svgW: number
     svgH: number
@@ -25,10 +25,10 @@ type ExpandMetrics = {
 
 async function readExpandMetrics(page: import('@playwright/test').Page): Promise<ExpandMetrics> {
     return page.evaluate(() => {
-        const inlineSvg = document.querySelector('[data-mermaid-diagram][data-rendered="true"] svg')
+        const inlineSvg = document.querySelector('[data-mermaid-diagram][data-rendered="true"] img')
         const inlineBox = inlineSvg?.getBoundingClientRect()
         const host = document.querySelector('[data-mermaid-lightbox]')
-        const lightboxSvg = host?.shadowRoot?.querySelector('svg')
+        const lightboxSvg = host?.shadowRoot?.querySelector('img')
         const lightboxBox = lightboxSvg?.getBoundingClientRect()
         const inlineArea = (inlineBox?.width ?? 0) * (inlineBox?.height ?? 0)
         const lightboxArea = (lightboxBox?.width ?? 0) * (lightboxBox?.height ?? 0)
@@ -46,8 +46,11 @@ async function readLightboxMetrics(page: import('@playwright/test').Page): Promi
     return page.evaluate(() => {
         const dialog = document.querySelector('[role="dialog"]')
         const host = dialog?.querySelector('[data-mermaid-lightbox]')
-        const svg = host?.shadowRoot?.querySelector('svg')
-        const box = svg?.getBoundingClientRect()
+        const image = host?.shadowRoot?.querySelector('img')
+        const svg = image ? new DOMParser().parseFromString(
+            decodeURIComponent(image.src.slice(image.src.indexOf(',') + 1)), 'image/svg+xml',
+        ).querySelector('svg') : null
+        const box = image?.getBoundingClientRect()
         const vw = window.visualViewport?.width ?? window.innerWidth
         const vh = window.visualViewport?.height ?? window.innerHeight
         const shapes = {
@@ -62,8 +65,8 @@ async function readLightboxMetrics(page: import('@playwright/test').Page): Promi
             + (svg?.querySelectorAll('text').length ?? 0)
             + (svg?.querySelectorAll('circle').length ?? 0)
         return {
-            hasShadowSvg: Boolean(svg),
-            usesDataUrlImg: Boolean(dialog?.querySelector('img[src^="data:image/svg"]')),
+            hasDiagramImage: Boolean(image?.complete && image.naturalWidth > 0),
+            usesDataUrlImg: Boolean(image?.src.startsWith('data:image/svg+xml')),
             svgW: box?.width ?? 0,
             svgH: box?.height ?? 0,
             coverageW: (box?.width ?? 0) / vw,
@@ -75,8 +78,8 @@ async function readLightboxMetrics(page: import('@playwright/test').Page): Promi
 }
 
 function assertMetrics(caseId: string, metrics: LightboxMetrics) {
-    expect(metrics.hasShadowSvg, `${caseId}: shadow-root svg`).toBe(true)
-    expect(metrics.usesDataUrlImg, `${caseId}: data-url img regression`).toBe(false)
+    expect(metrics.hasDiagramImage, `${caseId}: loaded diagram image`).toBe(true)
+    expect(metrics.usesDataUrlImg, `${caseId}: inert SVG image`).toBe(true)
     expect(
         metrics.svgW >= MIN_SVG_PX || metrics.svgH >= MIN_SVG_PX,
         `${caseId}: svg ${Math.round(metrics.svgW)}x${Math.round(metrics.svgH)}px`,
@@ -117,7 +120,7 @@ for (const caseId of MERMAID_LIGHTBOX_CASE_IDS) {
         await page.waitForSelector('[role="dialog"]', { timeout: 10_000 })
         await page.waitForFunction(() => {
             const host = document.querySelector('[data-mermaid-lightbox]')
-            const svg = host?.shadowRoot?.querySelector('svg')
+            const svg = host?.shadowRoot?.querySelector('img')
             const box = svg?.getBoundingClientRect()
             return Boolean(box && box.width > 0 && box.height > 0)
         }, { timeout: 15_000 })
@@ -126,7 +129,7 @@ for (const caseId of MERMAID_LIGHTBOX_CASE_IDS) {
             .waitForFunction(
                 (minCoverage) => {
                     const host = document.querySelector('[data-mermaid-lightbox]')
-                    const svg = host?.shadowRoot?.querySelector('svg')
+                    const svg = host?.shadowRoot?.querySelector('img')
                     const box = svg?.getBoundingClientRect()
                     if (!box || box.width <= 0) return false
                     const vw = window.visualViewport?.width ?? window.innerWidth
