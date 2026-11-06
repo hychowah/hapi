@@ -1,5 +1,9 @@
 # HAPI
 
+> This checkout is a local security fork. See the [local fork guide](docs/guide/local-fork.md)
+> for its patches, build instructions and upstream update workflow. The npm
+> installer below installs the upstream release rather than this patched build.
+
 Run official Claude Code / Codex / Cursor Agent / Grok Build / OpenCode / Kimi / Copilot / Antigravity / Pi / DeepSeek Harness sessions and control them remotely through native iOS / Android apps, Web / PWA, or Telegram Mini App.
 
 > **Why HAPI?** HAPI is a local-first alternative to Happy. See [Why Not Happy?](docs/guide/why-hapi.md) for the key differences.
